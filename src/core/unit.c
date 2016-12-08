@@ -3631,6 +3631,21 @@ int unit_kill_context(
                                         return -ENOMEM;
 
                                 cg_kill_recursive(SYSTEMD_CGROUP_CONTROLLER, u->cgroup_path, SIGHUP, false, true, false, pid_set);
+
+                        } else if (k == KILL_KILL) {
+                                Iterator i;
+                                void *p;
+
+                                SET_FOREACH(p, pid_set, i) {
+                                        _cleanup_free_ char *comm = NULL;
+                                        pid_t pid = PTR_TO_PID(p);
+
+                                        if (pid == main_pid || pid == control_pid)
+                                                continue;
+
+                                        get_process_comm(pid, &comm);
+                                        log_unit_error(u, "FOO: %s ignored TERM signal, killed.", strna(comm));
+                                }
                         }
                 }
         }
