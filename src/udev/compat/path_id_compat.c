@@ -178,7 +178,7 @@ static struct udev_device *handle_ata(struct udev_device *parent, char **path)
                 return NULL;
 
         path_prepend(path, "scsi-%u:%u:%u:%u", host, bus, target, lun);
-out:
+
         return hostdev;
 }
 
@@ -292,6 +292,34 @@ out:
         return parent;
 }
 
+/*
+ * This was the naming scheme used before commit e7eb5a8d88367a75
+ * (v228 and later) introduced a new format.
+ */
+static struct udev_device *handle_ccw(struct udev_device *parent, struct udev_device *dev, char **path) {
+        struct udev_device *scsi_dev;
+
+        scsi_dev = udev_device_get_parent_with_subsystem_devtype(dev, "scsi", "scsi_device");
+        if (scsi_dev != NULL) {
+                const char *wwpn;
+                const char *lun;
+                const char *hba_id;
+
+                hba_id = udev_device_get_sysattr_value(scsi_dev, "hba_id");
+                wwpn = udev_device_get_sysattr_value(scsi_dev, "wwpn");
+                lun = udev_device_get_sysattr_value(scsi_dev, "fcp_lun");
+                if (hba_id != NULL && lun != NULL && wwpn != NULL) {
+                        path_prepend(path, "ccw-%s-zfcp-%s:%s", hba_id, wwpn, lun);
+                        goto out;
+                }
+        }
+
+        path_prepend(path, "ccw-%s", udev_device_get_sysname(parent));
+out:
+        parent = skip_subsystem(parent, "ccw");
+        return parent;
+}
+
 int main(int argc, char **argv)
 {
         static const struct option options[] = {
@@ -343,6 +371,13 @@ int main(int argc, char **argv)
                 goto exit1;
         }
 
+        /* S390 ccw bus */
+        parent = udev_device_get_parent_with_subsystem_devtype(dev, "ccw", NULL);
+        if (parent != NULL) {
+                handle_ccw(parent, dev, &path);
+                goto out;
+        }
+
         /* walk up the chain of devices and compose path */
         parent = dev;
         while (parent != NULL) {
@@ -361,7 +396,7 @@ int main(int argc, char **argv)
 
                 parent = udev_device_get_parent(parent);
         }
-
+out:
         if (path != NULL) {
                 printf("ID_PATH_COMPAT%s=%s\n", strempty(compat_version_str), path);
                 free(path);
