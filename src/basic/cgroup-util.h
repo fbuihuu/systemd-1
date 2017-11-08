@@ -35,11 +35,11 @@
 typedef enum CGroupController {
         /* Original cgroup controllers */
         CGROUP_CONTROLLER_CPU,
-        CGROUP_CONTROLLER_CPUACCT,
-        CGROUP_CONTROLLER_IO,
-        CGROUP_CONTROLLER_BLKIO,
+        CGROUP_CONTROLLER_CPUACCT,    /* v1 only */
+        CGROUP_CONTROLLER_IO,         /* v2 only */
+        CGROUP_CONTROLLER_BLKIO,      /* v1 only */
         CGROUP_CONTROLLER_MEMORY,
-        CGROUP_CONTROLLER_DEVICES,
+        CGROUP_CONTROLLER_DEVICES,    /* v1 only */
         CGROUP_CONTROLLER_PIDS,
 
         /* BPF-based pseudo-controllers, v2 only */
