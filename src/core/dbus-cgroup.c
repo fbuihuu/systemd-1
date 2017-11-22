@@ -378,7 +378,7 @@ static int bus_cgroup_set_transient_property(
 
                         cc = cgroup_controller_from_string(t);
                         if (cc < 0)
-                                return sd_bus_error_set_errnof(error, EINVAL, "Unknown cgroup contoller '%s'", t);
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Unknown cgroup contoller '%s'", t);
 
                         mask |= CGROUP_CONTROLLER_TO_MASK(cc);
                 }
@@ -448,7 +448,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_WEIGHT_IS_OK(weight))
-                        return sd_bus_error_set_errnof(error, EINVAL, "CPUWeight value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "CPUWeight= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->cpu_weight = weight;
@@ -470,7 +470,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_WEIGHT_IS_OK(weight))
-                        return sd_bus_error_set_errnof(error, EINVAL, "StartupCPUWeight value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "StartupCPUWeight= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->startup_cpu_weight = weight;
@@ -492,7 +492,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_CPU_SHARES_IS_OK(shares))
-                        return sd_bus_error_set_errnof(error, EINVAL, "CPUShares value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "CPUShares= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->cpu_shares = shares;
@@ -514,7 +514,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_CPU_SHARES_IS_OK(shares))
-                        return sd_bus_error_set_errnof(error, EINVAL, "StartupCPUShares value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "StartupCPUShares= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->startup_cpu_shares = shares;
@@ -536,7 +536,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (u64 <= 0)
-                        return sd_bus_error_set_errnof(error, EINVAL, "CPUQuotaPerSecUSec value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "CPUQuotaPerSecUSec= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->cpu_quota_per_sec_usec = u64;
@@ -577,7 +577,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_WEIGHT_IS_OK(weight))
-                        return sd_bus_error_set_errnof(error, EINVAL, "IOWeight value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "IOWeight= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->io_weight = weight;
@@ -599,7 +599,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (CGROUP_WEIGHT_IS_OK(weight))
-                        return sd_bus_error_set_errnof(error, EINVAL, "StartupIOWeight value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "StartupIOWeight= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->startup_io_weight = weight;
@@ -707,7 +707,7 @@ int bus_cgroup_set_property(
                 while ((r = sd_bus_message_read(message, "(st)", &path, &weight)) > 0) {
 
                         if (!CGROUP_WEIGHT_IS_OK(weight) || weight == CGROUP_WEIGHT_INVALID)
-                                return sd_bus_error_set_errnof(error, EINVAL, "IODeviceWeight out of range");
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "IODeviceWeight= value out of range");
 
                         if (mode != UNIT_CHECK) {
                                 CGroupIODeviceWeight *a = NULL, *b;
@@ -794,7 +794,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_BLKIO_WEIGHT_IS_OK(weight))
-                        return sd_bus_error_set_errnof(error, EINVAL, "BlockIOWeight value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "BlockIOWeight= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->blockio_weight = weight;
@@ -816,7 +816,7 @@ int bus_cgroup_set_property(
                         return r;
 
                 if (!CGROUP_BLKIO_WEIGHT_IS_OK(weight))
-                        return sd_bus_error_set_errnof(error, EINVAL, "StartupBlockIOWeight value out of range");
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "StartupBlockIOWeight= value out of range");
 
                 if (mode != UNIT_CHECK) {
                         c->startup_blockio_weight = weight;
@@ -939,7 +939,7 @@ int bus_cgroup_set_property(
                 while ((r = sd_bus_message_read(message, "(st)", &path, &weight)) > 0) {
 
                         if (!CGROUP_BLKIO_WEIGHT_IS_OK(weight) || weight == CGROUP_BLKIO_WEIGHT_INVALID)
-                                return sd_bus_error_set_errnof(error, EINVAL, "BlockIODeviceWeight out of range");
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "BlockIODeviceWeight= out of range");
 
                         if (mode != UNIT_CHECK) {
                                 CGroupBlockIODeviceWeight *a = NULL, *b;
@@ -1025,7 +1025,7 @@ int bus_cgroup_set_property(
                 if (r < 0)
                         return r;
                 if (v <= 0)
-                        return sd_bus_error_set_errnof(error, EINVAL, "%s= is too small", name);
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= is too small", name);
 
                 if (mode != UNIT_CHECK) {
                         if (streq(name, "MemoryLow"))
@@ -1057,7 +1057,7 @@ int bus_cgroup_set_property(
 
                 v = physical_memory_scale(raw, UINT32_MAX);
                 if (v <= 0 || v == UINT64_MAX)
-                        return sd_bus_error_set_errnof(error, EINVAL, "%s= is out of range", name);
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= is out of range", name);
 
                 if (mode != UNIT_CHECK) {
                         const char *e;
@@ -1087,7 +1087,7 @@ int bus_cgroup_set_property(
                 if (r < 0)
                         return r;
                 if (limit <= 0)
-                        return sd_bus_error_set_errnof(error, EINVAL, "%s= is too small", name);
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= is too small", name);
 
                 if (mode != UNIT_CHECK) {
                         c->memory_limit = limit;
@@ -1111,7 +1111,7 @@ int bus_cgroup_set_property(
 
                 limit = physical_memory_scale(raw, UINT32_MAX);
                 if (limit <= 0 || limit == UINT64_MAX)
-                        return sd_bus_error_set_errnof(error, EINVAL, "%s= is out of range", name);
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= is out of range", name);
 
                 if (mode != UNIT_CHECK) {
                         c->memory_limit = limit;
@@ -1157,13 +1157,13 @@ int bus_cgroup_set_property(
                              !startswith(path, "block-") &&
                              !startswith(path, "char-")) ||
                             strpbrk(path, WHITESPACE))
-                            return sd_bus_error_set_errnof(error, EINVAL, "DeviceAllow= requires device node");
+                            return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "DeviceAllow= requires device node");
 
                         if (isempty(rwm))
                                 rwm = "rwm";
 
                         if (!in_charset(rwm, "rwm"))
-                                return sd_bus_error_set_errnof(error, EINVAL, "DeviceAllow= requires combination of rwm flags");
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "DeviceAllow= requires combination of rwm flags");
 
                         if (mode != UNIT_CHECK) {
                                 CGroupDeviceAllow *a = NULL, *b;
@@ -1254,7 +1254,7 @@ int bus_cgroup_set_property(
                 if (r < 0)
                         return r;
                 if (limit <= 0)
-                        return sd_bus_error_set_errnof(error, EINVAL, "%s= is too small", name);
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= is too small", name);
 
                 if (mode != UNIT_CHECK) {
                         c->tasks_max = limit;
@@ -1278,7 +1278,7 @@ int bus_cgroup_set_property(
 
                 limit = system_tasks_max_scale(raw, UINT32_MAX);
                 if (limit <= 0 || limit >= UINT64_MAX)
-                        return sd_bus_error_set_errnof(error, EINVAL, "%s= is out of range", name);
+                        return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= is out of range", name);
 
                 if (mode != UNIT_CHECK) {
                         c->tasks_max = limit;
@@ -1332,14 +1332,14 @@ int bus_cgroup_set_property(
                                 return r;
 
                         if (!IN_SET(family, AF_INET, AF_INET6))
-                                return sd_bus_error_set_errnof(error, EINVAL, "%s= expects IPv4 or IPv6 addresses only.", name);
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "%s= expects IPv4 or IPv6 addresses only.", name);
 
                         r = sd_bus_message_read_array(message, 'y', &ap, &an);
                         if (r < 0)
                                 return r;
 
                         if (an != FAMILY_ADDRESS_SIZE(family))
-                                return sd_bus_error_set_errnof(error, EINVAL, "IP address has wrong size for family (%s, expected %zu, got %zu)",
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "IP address has wrong size for family (%s, expected %zu, got %zu)",
                                                                af_to_name(family), FAMILY_ADDRESS_SIZE(family), an);
 
                         r = sd_bus_message_read(message, "u", &prefixlen);
@@ -1347,7 +1347,7 @@ int bus_cgroup_set_property(
                                 return r;
 
                         if (prefixlen > FAMILY_ADDRESS_SIZE(family)*8)
-                                return sd_bus_error_set_errnof(error, EINVAL, "Prefix length %" PRIu32 " too large for address family %s.", prefixlen, af_to_name(family));
+                                return sd_bus_error_setf(error, SD_BUS_ERROR_INVALID_ARGS, "Prefix length %" PRIu32 " too large for address family %s.", prefixlen, af_to_name(family));
 
                         if (mode != UNIT_CHECK) {
                                 IPAddressAccessItem *item;
