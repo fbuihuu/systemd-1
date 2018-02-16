@@ -701,77 +701,83 @@ static bool hardlink_vulnerable(const struct stat *st) {
         return !S_ISDIR(st->st_mode) && st->st_nlink > 1 && dangerous_hardlinks();
 }
 
-static int path_set_perms(Item *i, const char *path) {
+static int fd_set_perms(Item *i, int fd, const struct stat *st) {
         char fn[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
-        _cleanup_close_ int fd = -1;
-        struct stat st;
+        _cleanup_free_ char *path = NULL;
+        int r;
 
         assert(i);
-        assert(path);
 
-        /* We open the file with O_PATH here, to make the operation
-         * somewhat atomic. Also there's unfortunately no fchmodat()
-         * with AT_SYMLINK_NOFOLLOW, hence we emulate it here via
-         * O_PATH. */
+        xsprintf(fn, "/proc/self/fd/%i", fd);
+        r = readlink_malloc(fn, &path);
+        if (r < 0)
+                return r;
 
-        fd = open(path, O_NOFOLLOW|O_CLOEXEC|O_PATH);
-        if (fd < 0)
-                return log_error_errno(errno, "Adjusting owner and mode for %s failed: %m", path);
-
-        if (fstatat(fd, "", &st, AT_EMPTY_PATH) < 0)
-                return log_error_errno(errno, "Failed to fstat() file %s: %m", path);
-
-        if (hardlink_vulnerable(&st)) {
+        if (hardlink_vulnerable(st)) {
                 log_error("Refusing to set permissions on hardlinked file %s while the fs.protected_hardlinks sysctl is turned off.", path);
                 return -EPERM;
         }
 
-        xsprintf(fn, "/proc/self/fd/%i", fd);
-
         if (i->mode_set) {
-                if (S_ISLNK(st.st_mode))
+                if (S_ISLNK(st->st_mode))
                         log_debug("Skipping mode fix for symlink %s.", path);
                 else {
                         mode_t m = i->mode;
 
                         if (i->mask_perms) {
-                                if (!(st.st_mode & 0111))
+                                if (!(st->st_mode & 0111))
                                         m &= ~0111;
-                                if (!(st.st_mode & 0222))
+                                if (!(st->st_mode & 0222))
                                         m &= ~0222;
-                                if (!(st.st_mode & 0444))
+                                if (!(st->st_mode & 0444))
                                         m &= ~0444;
-                                if (!S_ISDIR(st.st_mode))
+                                if (!S_ISDIR(st->st_mode))
                                         m &= ~07000; /* remove sticky/sgid/suid bit, unless directory */
                         }
 
-                        if (m == (st.st_mode & 07777))
-                                log_debug("\"%s\" has correct mode %o already.", path, st.st_mode);
+                        if (m == (st->st_mode & 07777))
+                                log_debug("\"%s\" has correct mode %o already.", path, st->st_mode);
                         else {
                                 log_debug("Changing \"%s\" to mode %o.", path, m);
 
-                                if (chmod(fn, m) < 0)
-                                        return log_error_errno(errno, "chmod() of %s via %s failed: %m", path, fn);
+                                if (fchmod(fd, m) < 0)
+                                        return log_error_errno(errno, "fchmod() of %s via %s failed: %m", path, fn);
                         }
                 }
         }
 
-        if ((i->uid != st.st_uid || i->gid != st.st_gid) &&
+        if ((i->uid != st->st_uid || i->gid != st->st_gid) &&
             (i->uid_set || i->gid_set)) {
                 log_debug("Changing \"%s\" to owner "UID_FMT":"GID_FMT,
                           path,
                           i->uid_set ? i->uid : UID_INVALID,
                           i->gid_set ? i->gid : GID_INVALID);
 
-                if (chown(fn,
+                if (fchown(fd,
                           i->uid_set ? i->uid : UID_INVALID,
                           i->gid_set ? i->gid : GID_INVALID) < 0)
-                        return log_error_errno(errno, "chown() of %s via %s failed: %m", path, fn);
+                        return log_error_errno(errno, "fchown() of %s failed: %m", path);
         }
 
-        fd = safe_close(fd);
-
         return label_fix(path, false, false);
+}
+
+static int path_set_perms(Item *i, const char *path) {
+        _cleanup_close_ int fd = -1;
+        struct stat st;
+
+        assert(i);
+        assert(path);
+
+        fd = open(path, O_NOFOLLOW|O_CLOEXEC);
+        if (fd < 0)
+                return log_error_errno(errno, "Adjusting owner and mode for %s failed: %m", path);
+
+        /* FIXME: why not simply using fstat here ? */
+        if (fstatat(fd, "", &st, AT_EMPTY_PATH) < 0)
+                return log_error_errno(errno, "Failed to fstat() file %s: %m", path);
+
+        return fd_set_perms(i, fd, &st);
 }
 
 static int parse_xattrs_from_arg(Item *i) {
@@ -809,6 +815,33 @@ static int parse_xattrs_from_arg(Item *i) {
                 name = value = NULL;
         }
 
+        return 0;
+}
+
+static int fd_set_xattrs(Item *i, int fd, const struct stat *st) {
+        char fn[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
+        _cleanup_free_ char *path = NULL;
+        char **name, **value;
+        int r;
+
+        assert(i);
+        assert(fd);
+        assert(st);
+
+        xsprintf(fn, "/proc/self/fd/%i", fd);
+        r = readlink_malloc(fn, &path);
+        if (r < 0)
+                return r;
+
+        STRV_FOREACH_PAIR(name, value, i->xattrs) {
+                int n;
+
+                n = strlen(*value);
+                log_debug("Setting extended attribute '%s=%s' on %s.", *name, *value, path);
+                if (fsetxattr(fd, *name, *value, n, 0) < 0)
+                        return log_error_errno(errno, "Setting extended attribute %s=%s on %s failed: %m",
+                                               *name, *value, path);
+        }
         return 0;
 }
 
@@ -895,10 +928,52 @@ static int path_set_acl(const char *path, const char *pretty, acl_type_t type, a
 }
 #endif
 
+static int fd_set_acls(Item *item, int fd, const struct stat *st) {
+        int r = 0;
+#ifdef HAVE_ACL
+        char path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
+        _cleanup_free_ char *pretty = NULL;
+
+        assert(item);
+        assert(fd);
+        assert(st);
+
+        xsprintf(path, "/proc/self/fd/%i", fd);
+        r = readlink_malloc(path, &pretty);
+        if (r < 0)
+                return r;
+
+        if (hardlink_vulnerable(st)) {
+                log_error("Refusing to set ACLs on hardlinked file %s while the fs.protected_hardlinks sysctl is turned off.", pretty);
+                return -EPERM;
+        }
+
+        if (S_ISLNK(st->st_mode)) {
+                log_debug("Skipping ACL fix for symlink %s.", pretty);
+                return 0;
+        }
+
+        if (item->acl_access)
+                r = path_set_acl(path, pretty, ACL_TYPE_ACCESS, item->acl_access, item->force);
+
+        if (r == 0 && item->acl_default)
+                r = path_set_acl(path, pretty, ACL_TYPE_DEFAULT, item->acl_default, item->force);
+
+        if (r > 0)
+                return -r; /* already warned */
+        if (r == -EOPNOTSUPP) {
+                log_debug_errno(r, "ACLs not supported by file system at %s", pretty);
+                return 0;
+        }
+        if (r < 0)
+                return log_error_errno(r, "ACL operation on \"%s\" failed: %m", pretty);
+#endif
+        return r;
+}
+
 static int path_set_acls(Item *item, const char *path) {
         int r = 0;
 #ifdef HAVE_ACL
-        char fn[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
         _cleanup_close_ int fd = -1;
         struct stat st;
 
@@ -909,34 +984,11 @@ static int path_set_acls(Item *item, const char *path) {
         if (fd < 0)
                 return log_error_errno(errno, "Adjusting ACL of %s failed: %m", path);
 
+        /* FIXME why not simply using fstat() here ? */
         if (fstatat(fd, "", &st, AT_EMPTY_PATH) < 0)
                 return log_error_errno(errno, "Failed to fstat() file %s: %m", path);
 
-        if (hardlink_vulnerable(&st)) {
-                log_error("Refusing to set ACLs on hardlinked file %s while the fs.protected_hardlinks sysctl is turned off.", path);
-                return -EPERM;
-        }
-
-        if (S_ISLNK(st.st_mode)) {
-                log_debug("Skipping ACL fix for symlink %s.", path);
-                return 0;
-        }
-
-        xsprintf(fn, "/proc/self/fd/%i", fd);
-
-        if (item->acl_access)
-                r = path_set_acl(fn, path, ACL_TYPE_ACCESS, item->acl_access, item->force);
-
-        if (r == 0 && item->acl_default)
-                r = path_set_acl(fn, path, ACL_TYPE_DEFAULT, item->acl_default, item->force);
-
-        if (r > 0)
-                return -r; /* already warned */
-        else if (r == -EOPNOTSUPP) {
-                log_debug_errno(r, "ACLs not supported by file system at %s", path);
-                return 0;
-        } else if (r < 0)
-                log_error_errno(r, "ACL operation on \"%s\" failed: %m", path);
+        r = fd_set_acls(item, fd, &st);
 #endif
         return r;
 }
@@ -1040,11 +1092,46 @@ static int parse_attribute_from_arg(Item *item) {
         return 0;
 }
 
+static int fd_set_attribute(Item *item, int fd, const struct stat *st) {
+        char path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
+        _cleanup_free_ char *pretty = NULL;
+        unsigned f;
+        int r;
+
+        if (!item->attribute_set || item->attribute_mask == 0)
+                return 0;
+
+        xsprintf(path, "/proc/self/fd/%i", fd);
+        r = readlink_malloc(path, &pretty);
+        if (r < 0)
+                return r;
+
+        /* Issuing the file attribute ioctls on device nodes is not
+         * safe, as that will be delivered to the drivers, not the
+         * file system containing the device node. */
+        if (!S_ISREG(st->st_mode) && !S_ISDIR(st->st_mode)) {
+                log_error("Setting file flags is only supported on regular files and directories, cannot set on '%s'.", path);
+                return -EINVAL;
+        }
+
+        f = item->attribute_value & item->attribute_mask;
+
+        /* Mask away directory-specific flags */
+        if (!S_ISDIR(st->st_mode))
+                f &= ~FS_DIRSYNC_FL;
+
+        r = chattr_fd(fd, f, item->attribute_mask);
+        if (r < 0)
+                log_full_errno(r == -ENOTTY || r == -EOPNOTSUPP ? LOG_DEBUG : LOG_WARNING,
+                               r,
+                               "Cannot set file attribute for '%s', value=0x%08x, mask=0x%08x: %m",
+                               path, item->attribute_value, item->attribute_mask);
+        return 0;
+}
+
 static int path_set_attribute(Item *item, const char *path) {
         _cleanup_close_ int fd = -1;
         struct stat st;
-        unsigned f;
-        int r;
 
         if (!item->attribute_set || item->attribute_mask == 0)
                 return 0;
@@ -1060,28 +1147,8 @@ static int path_set_attribute(Item *item, const char *path) {
         if (fstat(fd, &st) < 0)
                 return log_error_errno(errno, "Cannot stat '%s': %m", path);
 
-        /* Issuing the file attribute ioctls on device nodes is not
-         * safe, as that will be delivered to the drivers, not the
-         * file system containing the device node. */
-        if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) {
-                log_error("Setting file flags is only supported on regular files and directories, cannot set on '%s'.", path);
-                return -EINVAL;
-        }
 
-        f = item->attribute_value & item->attribute_mask;
-
-        /* Mask away directory-specific flags */
-        if (!S_ISDIR(st.st_mode))
-                f &= ~FS_DIRSYNC_FL;
-
-        r = chattr_fd(fd, f, item->attribute_mask);
-        if (r < 0)
-                log_full_errno(r == -ENOTTY || r == -EOPNOTSUPP ? LOG_DEBUG : LOG_WARNING,
-                               r,
-                               "Cannot set file attribute for '%s', value=0x%08x, mask=0x%08x: %m",
-                               path, item->attribute_value, item->attribute_mask);
-
-        return 0;
+        return fd_set_attribute(item, fd, &st);
 }
 
 static int write_one_file(Item *i, const char *path) {
@@ -1143,48 +1210,86 @@ static int write_one_file(Item *i, const char *path) {
 }
 
 typedef int (*action_t)(Item *, const char *);
+typedef int (*faction_t)(Item *, int fd, const struct stat *st);
 
-static int item_do_children(Item *i, const char *path, action_t action) {
-        _cleanup_closedir_ DIR *d;
-        struct dirent *de;
-        int r = 0;
+static int item_do(Item *i, int fd, const struct stat *st, faction_t action) {
+        int r = 0, q;
 
         assert(i);
-        assert(path);
+        assert(fd >= 0);
+        assert(st);
 
         /* This returns the first error we run into, but nevertheless
          * tries to go on */
+        r = action(i, fd, st);
 
-        d = opendir_nomod(path);
-        if (!d)
-                return errno == ENOENT || errno == ENOTDIR ? 0 : -errno;
+        if (S_ISDIR(st->st_mode)) {
+                _cleanup_closedir_ DIR *d = NULL;
+                struct dirent *de;
 
-        FOREACH_DIRENT_ALL(de, d, r = -errno) {
-                _cleanup_free_ char *p = NULL;
-                int q;
+                d = fdopendir(fd);
+                if (!d) {
+                        r = r ?: -errno;
+                        goto finish;
+                }
+                fd = -1;
 
-                if (dot_or_dot_dot(de->d_name))
-                        continue;
+                FOREACH_DIRENT_ALL(de, d, q = -errno; goto finish) {
+                        struct stat de_st;
+                        int de_fd;
 
-                p = strjoin(path, "/", de->d_name);
-                if (!p)
-                        return -ENOMEM;
+                        if (dot_or_dot_dot(de->d_name))
+                                continue;
 
-                q = action(i, p);
-                if (q < 0 && q != -ENOENT && r == 0)
-                        r = q;
+                        de_fd = openat(dirfd(d), de->d_name, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOFOLLOW|O_NOATIME);
+                        if (de_fd >= 0 || fstat(de_fd, &de_st) >= 0)
+                                /* pass ownership of dirent fd over  */
+                                q = item_do(i, de_fd, &de_st, action);
+                        else
+                                q = -errno;
 
-                if (IN_SET(de->d_type, DT_UNKNOWN, DT_DIR)) {
-                        q = item_do_children(i, p, action);
                         if (q < 0 && r == 0)
                                 r = q;
                 }
+        }
+finish:
+        safe_close(fd);
+        return r;
+}
+
+static int glob_item_recursive(Item *i, faction_t action) {
+        _cleanup_globfree_ glob_t g = {
+                .gl_opendir = (void *(*)(const char *)) opendir_nomod,
+        };
+        int r = 0, k;
+        char **fn;
+
+        k = safe_glob(i->path, GLOB_NOSORT|GLOB_BRACE, &g);
+        if (k < 0 && k != -ENOENT)
+                return log_error_errno(k, "glob(%s) failed: %m", i->path);
+
+        STRV_FOREACH(fn, g.gl_pathv) {
+                _cleanup_close_ int fd = -1;
+                struct stat st;
+
+                fd = open(*fn, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOFOLLOW|O_NOATIME);
+                if (fd < 0 && r == 0) {
+                        r = -errno;
+                        continue;
+                }
+
+                k = item_do(i, fd, &st, action);
+                if (k < 0 && r == 0)
+                        r = k;
+
+                /* we passed fd ownership to the previous call */
+                fd = -1;
         }
 
         return r;
 }
 
-static int glob_item(Item *i, action_t action, bool recursive) {
+static int glob_item(Item *i, action_t action) {
         _cleanup_globfree_ glob_t g = {
                 .gl_opendir = (void *(*)(const char *)) opendir_nomod,
         };
@@ -1199,12 +1304,6 @@ static int glob_item(Item *i, action_t action, bool recursive) {
                 k = action(i, *fn);
                 if (k < 0 && r == 0)
                         r = k;
-
-                if (recursive) {
-                        k = item_do_children(i, *fn, action);
-                        if (k < 0 && r == 0)
-                                r = k;
-                }
         }
 
         return r;
@@ -1283,7 +1382,7 @@ static int create_item(Item *i) {
                 break;
 
         case WRITE_FILE:
-                r = glob_item(i, write_one_file, false);
+                r = glob_item(i, write_one_file);
                 if (r < 0)
                         return r;
 
@@ -1535,49 +1634,49 @@ static int create_item(Item *i) {
 
         case ADJUST_MODE:
         case RELABEL_PATH:
-                r = glob_item(i, path_set_perms, false);
+                r = glob_item(i, path_set_perms);
                 if (r < 0)
                         return r;
                 break;
 
         case RECURSIVE_RELABEL_PATH:
-                r = glob_item(i, path_set_perms, true);
+                r = glob_item_recursive(i, fd_set_perms);
                 if (r < 0)
                         return r;
                 break;
 
         case SET_XATTR:
-                r = glob_item(i, path_set_xattrs, false);
+                r = glob_item(i, path_set_xattrs);
                 if (r < 0)
                         return r;
                 break;
 
         case RECURSIVE_SET_XATTR:
-                r = glob_item(i, path_set_xattrs, true);
+                r = glob_item_recursive(i, fd_set_xattrs);
                 if (r < 0)
                         return r;
                 break;
 
         case SET_ACL:
-                r = glob_item(i, path_set_acls, false);
+                r = glob_item(i, path_set_acls);
                 if (r < 0)
                         return r;
                 break;
 
         case RECURSIVE_SET_ACL:
-                r = glob_item(i, path_set_acls, true);
+                r = glob_item_recursive(i, fd_set_acls);
                 if (r < 0)
                         return r;
                 break;
 
         case SET_ATTRIBUTE:
-                r = glob_item(i, path_set_attribute, false);
+                r = glob_item(i, path_set_attribute);
                 if (r < 0)
                         return r;
                 break;
 
         case RECURSIVE_SET_ATTRIBUTE:
-                r = glob_item(i, path_set_attribute, true);
+                r = glob_item_recursive(i, fd_set_attribute);
                 if (r < 0)
                         return r;
                 break;
@@ -1627,7 +1726,7 @@ static int remove_item(Item *i) {
         case REMOVE_PATH:
         case TRUNCATE_DIRECTORY:
         case RECURSIVE_REMOVE_PATH:
-                return glob_item(i, remove_item_instance, false);
+                return glob_item(i, remove_item_instance);
 
         default:
                 return 0;
@@ -1701,7 +1800,7 @@ static int clean_item(Item *i) {
                 clean_item_instance(i, i->path);
                 return 0;
         case IGNORE_DIRECTORY_PATH:
-                return glob_item(i, clean_item_instance, false);
+                return glob_item(i, clean_item_instance);
         default:
                 return 0;
         }
