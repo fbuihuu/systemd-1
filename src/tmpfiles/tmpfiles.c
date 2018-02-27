@@ -1143,7 +1143,6 @@ static int path_set_attribute(Item *item, const char *path) {
         if (fstat(fd, &st) < 0)
                 return log_error_errno(errno, "Cannot stat '%s': %m", path);
 
-
         return fd_set_attribute(item, fd, &st);
 }
 
