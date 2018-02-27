@@ -702,14 +702,12 @@ static bool hardlink_vulnerable(const struct stat *st) {
 }
 
 static int fd_set_perms(Item *i, int fd, const struct stat *st) {
-        char fn[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
         _cleanup_free_ char *path = NULL;
         int r;
 
         assert(i);
 
-        xsprintf(fn, "/proc/self/fd/%i", fd);
-        r = readlink_malloc(fn, &path);
+        r = fd_get_path(fd, &path);
         if (r < 0)
                 return r;
 
@@ -741,7 +739,7 @@ static int fd_set_perms(Item *i, int fd, const struct stat *st) {
                                 log_debug("Changing \"%s\" to mode %o.", path, m);
 
                                 if (fchmod(fd, m) < 0)
-                                        return log_error_errno(errno, "fchmod() of %s via %s failed: %m", path, fn);
+                                        return log_error_errno(errno, "fchmod() of %s via /proc/self/fd/%d failed: %m", path, fd);
                         }
                 }
         }
@@ -819,7 +817,6 @@ static int parse_xattrs_from_arg(Item *i) {
 }
 
 static int fd_set_xattrs(Item *i, int fd, const struct stat *st) {
-        char fn[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
         _cleanup_free_ char *path = NULL;
         char **name, **value;
         int r;
@@ -828,8 +825,7 @@ static int fd_set_xattrs(Item *i, int fd, const struct stat *st) {
         assert(fd);
         assert(st);
 
-        xsprintf(fn, "/proc/self/fd/%i", fd);
-        r = readlink_malloc(fn, &path);
+        r = fd_get_path(fd, &path);
         if (r < 0)
                 return r;
 
