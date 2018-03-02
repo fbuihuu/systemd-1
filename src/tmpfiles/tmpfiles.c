@@ -1205,9 +1205,9 @@ static int write_one_file(Item *i, const char *path) {
 }
 
 typedef int (*action_t)(Item *, const char *);
-typedef int (*faction_t)(Item *, int fd, const struct stat *st);
+typedef int (*fdaction_t)(Item *, int fd, const struct stat *st);
 
-static int item_do(Item *i, int fd, const struct stat *st, faction_t action) {
+static int item_do(Item *i, int fd, const struct stat *st, fdaction_t action) {
         int r = 0, q;
 
         assert(i);
@@ -1252,7 +1252,7 @@ finish:
         return r;
 }
 
-static int glob_item_recursively(Item *i, faction_t action) {
+static int glob_item_recursively(Item *i, fdaction_t action) {
         _cleanup_globfree_ glob_t g = {
                 .gl_opendir = (void *(*)(const char *)) opendir_nomod,
         };
