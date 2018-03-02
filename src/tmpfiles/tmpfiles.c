@@ -1252,7 +1252,7 @@ finish:
         return r;
 }
 
-static int glob_item_recursive(Item *i, faction_t action) {
+static int glob_item_recursively(Item *i, faction_t action) {
         _cleanup_globfree_ glob_t g = {
                 .gl_opendir = (void *(*)(const char *)) opendir_nomod,
         };
@@ -1635,7 +1635,7 @@ static int create_item(Item *i) {
                 break;
 
         case RECURSIVE_RELABEL_PATH:
-                r = glob_item_recursive(i, fd_set_perms);
+                r = glob_item_recursively(i, fd_set_perms);
                 if (r < 0)
                         return r;
                 break;
@@ -1647,7 +1647,7 @@ static int create_item(Item *i) {
                 break;
 
         case RECURSIVE_SET_XATTR:
-                r = glob_item_recursive(i, fd_set_xattrs);
+                r = glob_item_recursively(i, fd_set_xattrs);
                 if (r < 0)
                         return r;
                 break;
@@ -1659,7 +1659,7 @@ static int create_item(Item *i) {
                 break;
 
         case RECURSIVE_SET_ACL:
-                r = glob_item_recursive(i, fd_set_acls);
+                r = glob_item_recursively(i, fd_set_acls);
                 if (r < 0)
                         return r;
                 break;
@@ -1671,7 +1671,7 @@ static int create_item(Item *i) {
                 break;
 
         case RECURSIVE_SET_ATTRIBUTE:
-                r = glob_item_recursive(i, fd_set_attribute);
+                r = glob_item_recursively(i, fd_set_attribute);
                 if (r < 0)
                         return r;
                 break;
