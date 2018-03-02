@@ -736,10 +736,15 @@ static int fd_set_perms(Item *i, int fd, const struct stat *st) {
                         if (m == (st->st_mode & 07777))
                                 log_debug("\"%s\" has correct mode %o already.", path, st->st_mode);
                         else {
+                                char procfs_path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
+
                                 log_debug("Changing \"%s\" to mode %o.", path, m);
 
-                                if (fchmod(fd, m) < 0)
-                                        return log_error_errno(errno, "fchmod() of %s via /proc/self/fd/%d failed: %m", path, fd);
+                                /* fchmodat() still doesn't have AT_EMPTY_PATH flag. */
+                                xsprintf(procfs_path, "/proc/self/fd/%i", fd);
+
+                                if (chmod(procfs_path, m) < 0)
+                                        return log_error_errno(errno, "fchmodat() of %s failed: %m", path);
                         }
                 }
         }
@@ -751,9 +756,11 @@ static int fd_set_perms(Item *i, int fd, const struct stat *st) {
                           i->uid_set ? i->uid : UID_INVALID,
                           i->gid_set ? i->gid : GID_INVALID);
 
-                if (fchown(fd,
-                          i->uid_set ? i->uid : UID_INVALID,
-                          i->gid_set ? i->gid : GID_INVALID) < 0)
+                if (fchownat(fd,
+                             "",
+                             i->uid_set ? i->uid : UID_INVALID,
+                             i->gid_set ? i->gid : GID_INVALID,
+                             AT_EMPTY_PATH) < 0)
                         return log_error_errno(errno, "fchown() of %s failed: %m", path);
         }
 
@@ -767,12 +774,11 @@ static int path_set_perms(Item *i, const char *path) {
         assert(i);
         assert(path);
 
-        fd = open(path, O_NOFOLLOW|O_CLOEXEC);
+        fd = open(path, O_NOFOLLOW|O_CLOEXEC|O_PATH);
         if (fd < 0)
                 return log_error_errno(errno, "Adjusting owner and mode for %s failed: %m", path);
 
-        /* FIXME: why not simply using fstat here ? */
-        if (fstatat(fd, "", &st, AT_EMPTY_PATH) < 0)
+        if (fstat(fd, &st) < 0)
                 return log_error_errno(errno, "Failed to fstat() file %s: %m", path);
 
         return fd_set_perms(i, fd, &st);
@@ -817,6 +823,7 @@ static int parse_xattrs_from_arg(Item *i) {
 }
 
 static int fd_set_xattrs(Item *i, int fd, const struct stat *st) {
+        char procfs_path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
         _cleanup_free_ char *path = NULL;
         char **name, **value;
         int r;
@@ -829,12 +836,15 @@ static int fd_set_xattrs(Item *i, int fd, const struct stat *st) {
         if (r < 0)
                 return r;
 
+        xsprintf(procfs_path, "/proc/self/fd/%i", fd);
+
         STRV_FOREACH_PAIR(name, value, i->xattrs) {
+                _cleanup_close_ int fullfd = -1;
                 int n;
 
                 n = strlen(*value);
                 log_debug("Setting extended attribute '%s=%s' on %s.", *name, *value, path);
-                if (fsetxattr(fd, *name, *value, n, 0) < 0)
+                if (setxattr(procfs_path, *name, *value, n, 0) < 0)
                         return log_error_errno(errno, "Setting extended attribute %s=%s on %s failed: %m",
                                                *name, *value, path);
         }
@@ -927,42 +937,43 @@ static int path_set_acl(const char *path, const char *pretty, acl_type_t type, a
 static int fd_set_acls(Item *item, int fd, const struct stat *st) {
         int r = 0;
 #ifdef HAVE_ACL
-        char path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
-        _cleanup_free_ char *pretty = NULL;
+        char procfs_path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
+        _cleanup_free_ char *path = NULL;
 
         assert(item);
         assert(fd);
         assert(st);
 
-        xsprintf(path, "/proc/self/fd/%i", fd);
-        r = readlink_malloc(path, &pretty);
+        r = fd_get_path(fd, &path);
         if (r < 0)
                 return r;
 
         if (hardlink_vulnerable(st)) {
-                log_error("Refusing to set ACLs on hardlinked file %s while the fs.protected_hardlinks sysctl is turned off.", pretty);
+                log_error("Refusing to set ACLs on hardlinked file %s while the fs.protected_hardlinks sysctl is turned off.", path);
                 return -EPERM;
         }
 
         if (S_ISLNK(st->st_mode)) {
-                log_debug("Skipping ACL fix for symlink %s.", pretty);
+                log_debug("Skipping ACL fix for symlink %s.", path);
                 return 0;
         }
 
+        xsprintf(procfs_path, "/proc/self/fd/%i", fd);
+
         if (item->acl_access)
-                r = path_set_acl(path, pretty, ACL_TYPE_ACCESS, item->acl_access, item->force);
+                r = path_set_acl(procfs_path, path, ACL_TYPE_ACCESS, item->acl_access, item->force);
 
         if (r == 0 && item->acl_default)
-                r = path_set_acl(path, pretty, ACL_TYPE_DEFAULT, item->acl_default, item->force);
+                r = path_set_acl(procfs_path, path, ACL_TYPE_DEFAULT, item->acl_default, item->force);
 
         if (r > 0)
                 return -r; /* already warned */
         if (r == -EOPNOTSUPP) {
-                log_debug_errno(r, "ACLs not supported by file system at %s", pretty);
+                log_debug_errno(r, "ACLs not supported by file system at %s", path);
                 return 0;
         }
         if (r < 0)
-                return log_error_errno(r, "ACL operation on \"%s\" failed: %m", pretty);
+                return log_error_errno(r, "ACL operation on \"%s\" failed: %m", path);
 #endif
         return r;
 }
@@ -980,8 +991,7 @@ static int path_set_acls(Item *item, const char *path) {
         if (fd < 0)
                 return log_error_errno(errno, "Adjusting ACL of %s failed: %m", path);
 
-        /* FIXME why not simply using fstat() here ? */
-        if (fstatat(fd, "", &st, AT_EMPTY_PATH) < 0)
+        if (fstat(fd, &st) < 0)
                 return log_error_errno(errno, "Failed to fstat() file %s: %m", path);
 
         r = fd_set_acls(item, fd, &st);
@@ -1089,16 +1099,16 @@ static int parse_attribute_from_arg(Item *item) {
 }
 
 static int fd_set_attribute(Item *item, int fd, const struct stat *st) {
-        char path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
-        _cleanup_free_ char *pretty = NULL;
+        char procfs_path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
+        _cleanup_close_ int procfs_fd = -1;
+        _cleanup_free_ char *path = NULL;
         unsigned f;
         int r;
 
         if (!item->attribute_set || item->attribute_mask == 0)
                 return 0;
 
-        xsprintf(path, "/proc/self/fd/%i", fd);
-        r = readlink_malloc(path, &pretty);
+        r = fd_get_path(fd, &path);
         if (r < 0)
                 return r;
 
@@ -1116,7 +1126,13 @@ static int fd_set_attribute(Item *item, int fd, const struct stat *st) {
         if (!S_ISDIR(st->st_mode))
                 f &= ~FS_DIRSYNC_FL;
 
-        r = chattr_fd(fd, f, item->attribute_mask);
+        xsprintf(procfs_path, "/proc/self/fd/%i", fd);
+
+        procfs_fd = open(procfs_path, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOATIME);
+        if (procfs_fd < 0)
+                return -errno;
+
+        r = chattr_fd(procfs_fd, f, item->attribute_mask);
         if (r < 0)
                 log_full_errno(r == -ENOTTY || r == -EOPNOTSUPP ? LOG_DEBUG : LOG_WARNING,
                                r,
@@ -1132,13 +1148,9 @@ static int path_set_attribute(Item *item, const char *path) {
         if (!item->attribute_set || item->attribute_mask == 0)
                 return 0;
 
-        fd = open(path, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOATIME|O_NOFOLLOW);
-        if (fd < 0) {
-                if (errno == ELOOP)
-                        return log_error_errno(errno, "Skipping file attributes adjustment on symlink %s.", path);
-
+        fd = open(path, O_CLOEXEC|O_NOFOLLOW|O_PATH);
+        if (fd < 0)
                 return log_error_errno(errno, "Cannot open '%s': %m", path);
-        }
 
         if (fstat(fd, &st) < 0)
                 return log_error_errno(errno, "Cannot stat '%s': %m", path);
@@ -1219,15 +1231,27 @@ static int item_do(Item *i, int fd, const struct stat *st, fdaction_t action) {
         r = action(i, fd, st);
 
         if (S_ISDIR(st->st_mode)) {
+                char procfs_path[strlen("/proc/self/fd/") + DECIMAL_STR_MAX(int)];
                 _cleanup_closedir_ DIR *d = NULL;
                 struct dirent *de;
+                int procfs_fd;
 
-                d = fdopendir(fd);
+                /* The passed 'fd' was opened with O_PATH. We need to convert
+                 * it into a 'regular' fd before reading the directory content. */
+                xsprintf(procfs_path, "/proc/self/fd/%i", fd);
+
+                procfs_fd = open(procfs_path, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOATIME|O_DIRECTORY);
+                if (procfs_fd < 0) {
+                        r = r ?: -errno;
+                        goto finish;
+                }
+
+                d = fdopendir(procfs_fd);
                 if (!d) {
                         r = r ?: -errno;
                         goto finish;
                 }
-                fd = -1;
+                procfs_fd = -1;    /* will be closed by closedir() */
 
                 FOREACH_DIRENT_ALL(de, d, q = -errno; goto finish) {
                         struct stat de_st;
@@ -1236,7 +1260,7 @@ static int item_do(Item *i, int fd, const struct stat *st, fdaction_t action) {
                         if (dot_or_dot_dot(de->d_name))
                                 continue;
 
-                        de_fd = openat(dirfd(d), de->d_name, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOFOLLOW|O_NOATIME);
+                        de_fd = openat(fd, de->d_name, O_NOFOLLOW|O_CLOEXEC|O_PATH);
                         if (de_fd >= 0 || fstat(de_fd, &de_st) >= 0)
                                 /* pass ownership of dirent fd over  */
                                 q = item_do(i, de_fd, &de_st, action);
@@ -1267,7 +1291,12 @@ static int glob_item_recursively(Item *i, fdaction_t action) {
                 _cleanup_close_ int fd = -1;
                 struct stat st;
 
-                fd = open(*fn, O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOFOLLOW|O_NOATIME);
+                /* Make sure we won't trigger/follow file object (such as
+                 * device nodes, sockets, ...) pointed out by 'fn' with
+                 * O_PATH. Note: when O_PATH is used, flags other than
+                 * O_CLOEXEC, O_DIRECTORY, and O_NOFOLLOW are ignored. */
+
+                fd = open(*fn, O_CLOEXEC|O_NOFOLLOW|O_PATH);
                 if (fd < 0 && r == 0) {
                         r = -errno;
                         continue;
