@@ -154,9 +154,11 @@ static int user_save_internal(User *u) {
         fprintf(f,
                 "# This is private data. Do not parse.\n"
                 "NAME=%s\n"
-                "STATE=%s\n",
+                "STATE=%s\n"         /* friendly user-facing state */
+                "STOPPING=%s\n",     /* low-level state */
                 u->name,
-                user_state_to_string(user_get_state(u)));
+                user_state_to_string(user_get_state(u)),
+                yes_no(u->stopping));
 
         /* LEGACY: no-one reads RUNTIME= anymore, drop it at some point */
         if (u->runtime_path)
@@ -295,7 +297,7 @@ int user_save(User *u) {
 }
 
 int user_load(User *u) {
-        _cleanup_free_ char *display = NULL, *realtime = NULL, *monotonic = NULL;
+        _cleanup_free_ char *display = NULL, *realtime = NULL, *monotonic = NULL, *stopping = NULL;
         Session *s = NULL;
         int r;
 
@@ -303,7 +305,7 @@ int user_load(User *u) {
 
         r = parse_env_file(u->state_file, NEWLINE,
                            "SERVICE_JOB", &u->service_job,
-                           "SLICE_JOB",   &u->slice_job,
+                           "STOPPING",    &stopping,
                            "DISPLAY",     &display,
                            "REALTIME",    &realtime,
                            "MONOTONIC",   &monotonic,
@@ -321,12 +323,20 @@ int user_load(User *u) {
         if (s && s->display && display_is_local(s->display))
                 u->display = s;
 
+        if (stopping) {
+                r = parse_boolean(stopping);
+                if (r < 0)
+                        log_debug_errno(r, "Failed to parse 'STOPPING' boolean: %s", stopping);
+                else
+                        u->stopping = r;
+        }
+
         if (realtime)
                 timestamp_deserialize(realtime, &u->timestamp.realtime);
         if (monotonic)
                 timestamp_deserialize(monotonic, &u->timestamp.monotonic);
 
-        return r;
+        return 0;
 }
 
 static int user_mkdir_runtime_path(User *u) {
